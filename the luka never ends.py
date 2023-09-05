@@ -1,17 +1,55 @@
+from datetime import datetime, timedelta
+
 import discord
 import time
+import json
 
-token = "[redacted]"
-filename = "luka.mp3"
+secrets = json.load(open("secrets.json"))
+token = secrets["token"]
+filename = secrets["filename"]
+channel_id = secrets["channel_id"]
+
+
+def time_to_string(time):
+    return datetime.fromtimestamp(time).strftime("%c")
+
+
+def timedelta_to_string(td):
+    temp = timedelta(seconds=td)
+
+    l = []
+
+    if (a := temp.days) != 0:
+        l.append(f"{a} day{'s' if a > 1 else ''}")
+    if (a := temp.seconds // 3600) != 0:
+        l.append(f"{a} hour{'s' if a > 1 else ''}")
+    if (a := (temp.seconds // 60) % 60) != 0:
+        l.append(f"{a} minute{'s' if a > 1 else ''}")
+    if (a := temp.seconds % 60) != 0:
+        l.append(f"{a} second{'s' if a > 1 else ''}")
+
+    if len(l) == 0:
+        out = "error"
+    elif len(l) == 1:
+        out = l[0]
+    else:
+        out = ", ".join(l[:-1]) + " and " + l[-1]
+
+    return out
 
 
 # yes i'm lazy but honestly i really could care less
 class DB:
     def __init__(self):
-        self.start_time = time.time()
-        self.total_plays = 0
 
-        self.user_db = {}
+        with open("h.txt") as f:
+            lines = f.readlines()
+
+            self.total_plays = int(lines[0])
+            self.start_time = float(lines[1])
+            self.user_db = eval(lines[2])  # unsafe but honestly who tf cares
+
+            print(self.total_plays, self.start_time, self.user_db, sep="\n")
 
     def create_user(self, user_id):
         self.user_db[user_id] = {  # key is user id
@@ -29,17 +67,20 @@ class DB:
             print(f"Creating db for {user_id}")
             self.create_user(user_id)
 
+        self.user_db[user_id]["in_vc"] = True
+
         if not self.user_db[user_id]["in_vc"] and time.time() > self.user_db[user_id]["return_time"]:
 
             print(f"User {user_id} joined")
 
             self.user_db[user_id]["join_time"] = time.time()
-            self.user_db[user_id]["in_vc"] = True
         else:
             # fix the added time
             self.user_db[user_id]["total_time"] -= self.user_db[user_id]["leave_time"] - self.user_db[user_id][
                 "join_time"]
             print(f"User {user_id} returned")
+
+        self.save()
 
     def user_leave(self, user_id):
 
@@ -53,15 +94,26 @@ class DB:
         self.update(user_id)
 
     def update(self, user_id):
-        current = (time.time() if self.user_db[user_id]["in_vc"] else self.user_db[user_id]["leave_time"]) - \
-                  self.user_db[user_id]["join_time"]
+        current = self.user_db[user_id]["leave_time"] - self.user_db[user_id]["join_time"]
         if current > self.user_db[user_id]["max_time"]:
             self.user_db[user_id]["max_time"] = current
             self.user_db[user_id]["max_start_time"] = self.user_db[user_id]["join_time"]
 
+        self.save()
+
     def get_info(self, user_id):
         self.update(user_id)
         return self.user_db[user_id]
+
+    def save(self):
+        with open("h.txt", "w") as f:
+            f.write(str(self.total_plays))
+            f.write("\n")
+            f.write(str(self.start_time))
+            f.write("\n")
+            f.write(str(self.user_db))
+
+        print("saving DB values")
 
 
 class TheLukaNeverEnds(discord.Client):
@@ -70,7 +122,7 @@ class TheLukaNeverEnds(discord.Client):
 
         self.db = DB()
 
-        self.channel = self.get_channel(833063357460119572)
+        self.channel = self.get_channel(channel_id)
         assert (self.channel is not None)
 
         await self.start_music()
@@ -80,6 +132,7 @@ class TheLukaNeverEnds(discord.Client):
 
         def repeat(voice, audio):
             self.db.total_plays += 1
+            self.db.save()
             voice.play(audio, after=lambda e: repeat(voice, discord.FFmpegPCMAudio(filename)))
 
         music = discord.FFmpegPCMAudio(filename)
@@ -89,23 +142,79 @@ class TheLukaNeverEnds(discord.Client):
 
         voice.play(music, after=lambda e: repeat(voice, music))
 
-    async def on_voice_state_update(self, member, before, after):
+    """async def on_voice_state_update(self, member, before, after):
         if before.channel == self.channel and after.channel != self.channel:
             self.db.user_leave(member.id)
         elif after.channel == self.channel and before.channel != self.channel:
-            self.db.user_join(member.id)
+            self.db.user_join(member.id)"""
 
     async def on_message(self, message):
-        if message.content == "tl!info":
-            with open("h.txt", "w") as f:
-                f.write(str(self.db.total_plays))
-                f.write("\n")
-                f.write(str(self.db.start_time))
-                f.write("\n")
-                f.write(str(self.db.user_db))
 
-            print(self.db.total_plays, self.db.start_time, self.db.user_db, sep="\n")
+        command = message.content.split(" ")
+
+        if command[0] == "tl!info":
+
+            """if len(command) == 1:
+                user_id = message.author.id
+            elif len(command) == 2:
+                try:
+                    user_id = message.mentions[0].id
+                except IndexError:
+                    try:
+                        user_id = int(command[1])
+                    except ValueError:
+                        await message.channel.send(f"Unable to find user {command[1]}.")
+                        return
+            else:
+                await message.channel.send("Too many arguments.")
+                return"""
+
+            description = f"I have been running since `{time_to_string(self.db.start_time)}`, or for `{timedelta_to_string(time.time() - self.db.start_time)}`.\n"
+            description += f"During this time, I've played Luka's song a total of `{self.db.total_plays}` times and had a total of `{len(self.db.user_db)}` people visit me."
+
+            embed = discord.Embed(description=description, color=0xffaadd)
+            embed.set_author(name="Oh? You're interesteed in me?",
+                             icon_url="https://cdn.discordapp.com/avatars/832395029481127946/ac668a749d52ebd907d754558ed76c0b.png?size=1024")
+
+            await message.channel.send(embed=embed)
+
+            """
+            try:
+                data = self.db.get_info(user_id)
+            except KeyError:
+                await message.channel.send(f"User {command[1]} has never visited me before :(.")
+                return
+
+            user = self.get_user(user_id)
+
+            description = f"`{user.name}` is "
+            if data["in_vc"]:
+                description += "currently enjoying Luka's presence.\n"
+                description += f"They have spent `{timedelta_to_string(time.time() - data['join_time'])}` with me so far, "
+
+                if (time.time() - data['join_time']) > data['max_time']:
+                    description += "which is the longest time they have ever spent with me.\n"
+                else:
+                    description += f"but they have spent `{timedelta_to_string(data['max_time'])}` with me before between `{time_to_string(data['max_start_time'])}` and `{time_to_string(data['max_start_time'] + data['max_time'])}`.\n"
+
+            else:
+                description += "`currently out of Luka's presence`.\n"
+                description += f"The longest time they ever spent with me was `{timedelta_to_string(data['max_time'])}` between `{time_to_string(data['max_start_time'])}` and `{time_to_string(data['max_start_time'] + data['max_time'])}`\n"
+
+            total_time = data['total_time'] + (time.time() - data['join_time'] if data["in_vc"] else 0)
+            description += f"They have spent a total of `{timedelta_to_string(total_time)}` with me, of which every moment was cherished."
+
+            embed = discord.Embed(description=description, color=0xffaadd)
+            embed.set_author(name=f"{user.name}'s statistics",
+                             icon_url=user.avatar_url)
+            embed.set_footer(text="All times are in UTC. (I'm lazy)")
+
+            await message.channel.send(embed=embed)
+
+            # print(self.db.total_plays, self.db.start_time, self.db.user_db, sep="\n")
+            """
 
 
 if __name__ == '__main__':
-    TheLukaNeverEnds(intents=discord.Intents(guilds=True, voice_states=True, guild_messages=True)).run(token)
+    TheLukaNeverEnds(intents=discord.Intents(guilds=True, voice_states=True, guild_messages=True, members=True)).run(
+        token)
